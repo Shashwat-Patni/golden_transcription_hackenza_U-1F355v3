@@ -176,7 +176,6 @@ METRIC_LABELS = {
     "semantic_similarity": "Semantic Similarity",
     "precision": "Precision",
     "recall": "Recall",
-    "alignment": "Alignment",
     "fluency": "Fluency",
     "punctuation": "Punctuation",
 }
@@ -188,7 +187,6 @@ METRIC_COLORS = {
     "semantic_similarity": "#58a6ff",
     "precision": "#d2a8ff",
     "recall": "#79c0ff",
-    "alignment": "#56d364",
     "fluency": "#f0883e",
     "punctuation": "#e3b341",
 }
@@ -446,7 +444,7 @@ st.sidebar.markdown(chips_html, unsafe_allow_html=True)
 # ═══════════════════════════════════════════════════════════════════════════════
 tab1, tab2 = st.tabs(["Single Transcription", "Batch Verification"])
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────��─────────────────────────────────────
 # TAB 1 — Single Transcription
 # ───────────────────────────────────────────────────────────────────────────────
 with tab1:
