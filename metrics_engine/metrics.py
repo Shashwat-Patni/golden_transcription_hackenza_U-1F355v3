@@ -78,8 +78,9 @@ SENTENCE_MODEL_NAME = "paraphrase-multilingual-mpnet-base-v2"
 
 # Multilingual LM for perplexity-based fluency — supports 50+ languages.
 # Set USE_LM_PERPLEXITY = True to enable (slower, requires ~2GB memory).
+# Disabled by default — mGPT is ~2GB and can cause OOM crashes alongside Whisper large-v3.
 FLUENCY_LM_NAME = "ai-forever/mGPT"
-USE_LM_PERPLEXITY = True
+USE_LM_PERPLEXITY = False
 
 # Lazy-loaded singletons
 _sentence_model: Optional[SentenceTransformer] = None
