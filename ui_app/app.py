@@ -861,26 +861,39 @@ with tab2:
                                     correct_count += 1
                                 total_count += 1
 
-                                results_data.append(
-                                    {
-                                        "Audio ID": audio_id,
-                                        "Language": lang_name,
-                                        "Top Rank (Predicted)": top_rank_id,
-                                        "Correct Option": correct_opt,
-                                        "CQS": scoring_result["results"][0]["cqs_score"],
-                                        "Match": is_correct,
-                                    }
-                                )
+                                row_result = {
+                                    "Audio ID": audio_id,
+                                    "Language": lang_name,
+                                    "Match": is_correct,
+                                    "Correct Option": correct_opt,
+                                    "Top Predicted": top_rank_id,
+                                }
+                                
+                                # Add Rank and CQS for each option 1-5
+                                for i in range(1, 6):
+                                    opt_res = next((r for r in scoring_result["results"] if r["transcription_id"] == str(i)), None)
+                                    if opt_res:
+                                        row_result[f"Opt {i} Rank"] = opt_res["rank"]
+                                        row_result[f"Opt {i} CQS"] = round(opt_res["cqs_score"], 4)
+                                    else:
+                                        row_result[f"Opt {i} Rank"] = "-"
+                                        row_result[f"Opt {i} CQS"] = "-"
+                                        
+                                results_data.append(row_result)
 
                         except Exception as e:
                             results_data.append(
                                 {
                                     "Audio ID": audio_id,
                                     "Language": "-",
-                                    "Top Rank (Predicted)": "-",
-                                    "Correct Option": correct_opt,
-                                    "CQS": 0,
                                     "Match": False,
+                                    "Correct Option": correct_opt,
+                                    "Top Predicted": "-",
+                                    "Opt 1 Rank": "-", "Opt 1 CQS": "-",
+                                    "Opt 2 Rank": "-", "Opt 2 CQS": "-",
+                                    "Opt 3 Rank": "-", "Opt 3 CQS": "-",
+                                    "Opt 4 Rank": "-", "Opt 4 CQS": "-",
+                                    "Opt 5 Rank": "-", "Opt 5 CQS": "-",
                                 }
                             )
                             st.warning(f"Row {index + 1} ({audio_id}): {e}")
