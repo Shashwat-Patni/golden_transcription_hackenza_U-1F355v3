@@ -193,18 +193,241 @@ METRIC_COLORS = {
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Adjust Metric Weights")
-st.sidebar.caption("Drag the sliders — weights are auto-normalised to sum to 1.")
+st.sidebar.caption("Drag the boundaries between slices on the pie chart to adjust weights.")
 
-# Sliders that write raw values into session state
-for key in DEFAULT_WEIGHTS:
-    st.session_state.weights[key] = st.sidebar.slider(
-        METRIC_LABELS[key],
-        min_value=0.0,
-        max_value=1.0,
-        value=st.session_state.weights.get(key, DEFAULT_WEIGHTS[key]),
-        step=0.01,
-        key=f"slider_{key}",
-    )
+import streamlit.components.v1 as components
+import json
+
+# Build the interactive pie chart HTML/JS component
+_pie_keys = list(DEFAULT_WEIGHTS.keys())
+_pie_labels = [METRIC_LABELS[k] for k in _pie_keys]
+_pie_colors = [METRIC_COLORS[k] for k in _pie_keys]
+_pie_values = [st.session_state.weights[k] for k in _pie_keys]
+
+_interactive_pie_html = """
+<div id="pie-container" style="width:100%;display:flex;flex-direction:column;align-items:center;user-select:none;">
+  <svg id="pie-svg" width="280" height="280" viewBox="0 0 280 280"></svg>
+  <div id="pie-legend" style="margin-top:8px;width:100%;"></div>
+  <div id="pie-output" style="display:none;"></div>
+</div>
+<script>
+(function() {
+  const CX = 140, CY = 140, R = 110, INNER_R = 50;
+  const HANDLE_R = 8;
+  const keys = """ + json.dumps(_pie_keys) + """;
+  const labels = """ + json.dumps(_pie_labels) + """;
+  const colors = """ + json.dumps(_pie_colors) + """;
+  let values = """ + json.dumps(_pie_values) + """;
+
+  // Normalize values
+  let total = values.reduce((a, b) => a + b, 0);
+  if (total <= 0) { values = values.map(() => 1.0 / values.length); total = 1; }
+  else { values = values.map(v => v / total); }
+
+  const svg = document.getElementById('pie-svg');
+  const legend = document.getElementById('pie-legend');
+  const output = document.getElementById('pie-output');
+  let dragging = -1;
+
+  function toRad(deg) { return deg * Math.PI / 180; }
+
+  function polarToCart(cx, cy, r, angleDeg) {
+    const rad = toRad(angleDeg - 90);
+    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+  }
+
+  function describeArc(cx, cy, outerR, innerR, startAngle, endAngle) {
+    const sweep = endAngle - startAngle;
+    const largeArc = sweep > 180 ? 1 : 0;
+    const outerStart = polarToCart(cx, cy, outerR, startAngle);
+    const outerEnd = polarToCart(cx, cy, outerR, endAngle);
+    const innerStart = polarToCart(cx, cy, innerR, endAngle);
+    const innerEnd = polarToCart(cx, cy, innerR, startAngle);
+    return [
+      `M ${outerStart.x} ${outerStart.y}`,
+      `A ${outerR} ${outerR} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
+      `L ${innerStart.x} ${innerStart.y}`,
+      `A ${innerR} ${innerR} 0 ${largeArc} 0 ${innerEnd.x} ${innerEnd.y}`,
+      'Z'
+    ].join(' ');
+  }
+
+  function render() {
+    svg.innerHTML = '';
+    let startAngle = 0;
+    const angles = [];
+
+    // Draw slices
+    for (let i = 0; i < values.length; i++) {
+      const sliceAngle = values[i] * 360;
+      const endAngle = startAngle + sliceAngle;
+      angles.push({ start: startAngle, end: endAngle });
+
+      if (sliceAngle > 0.5) {
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', describeArc(CX, CY, R, INNER_R, startAngle, endAngle));
+        path.setAttribute('fill', colors[i]);
+        path.setAttribute('stroke', '#0d1117');
+        path.setAttribute('stroke-width', '2');
+        path.style.cursor = 'default';
+
+        // Label
+        const midAngle = startAngle + sliceAngle / 2;
+        const labelR = (R + INNER_R) / 2;
+        const lp = polarToCart(CX, CY, labelR, midAngle);
+        const pct = (values[i] * 100).toFixed(0);
+        if (sliceAngle > 20) {
+          const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          text.setAttribute('x', lp.x);
+          text.setAttribute('y', lp.y);
+          text.setAttribute('text-anchor', 'middle');
+          text.setAttribute('dominant-baseline', 'central');
+          text.setAttribute('fill', '#fff');
+          text.setAttribute('font-size', '11');
+          text.setAttribute('font-weight', '600');
+          text.setAttribute('pointer-events', 'none');
+          text.textContent = pct + '%';
+          svg.appendChild(path);
+          svg.appendChild(text);
+        } else {
+          svg.appendChild(path);
+        }
+      }
+      startAngle = endAngle;
+    }
+
+    // Draw draggable boundary handles
+    for (let i = 0; i < values.length; i++) {
+      const boundaryAngle = angles[i].end;
+      const hp = polarToCart(CX, CY, (R + INNER_R) / 2, boundaryAngle);
+
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', hp.x);
+      circle.setAttribute('cy', hp.y);
+      circle.setAttribute('r', HANDLE_R);
+      circle.setAttribute('fill', '#e6edf3');
+      circle.setAttribute('stroke', '#0d1117');
+      circle.setAttribute('stroke-width', '2');
+      circle.style.cursor = 'grab';
+      circle.dataset.index = i;
+
+      circle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        dragging = parseInt(circle.dataset.index);
+        circle.style.cursor = 'grabbing';
+      });
+      circle.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        dragging = parseInt(circle.dataset.index);
+      }, {passive: false});
+      svg.appendChild(circle);
+    }
+
+    // Update legend
+    legend.innerHTML = keys.map((k, i) => {
+      const pct = (values[i] * 100).toFixed(1);
+      return '<div style="display:inline-block;background:rgba(56,139,253,0.12);border:1px solid ' + colors[i] + '40;border-radius:999px;padding:2px 8px;margin:2px;font-size:12px;color:' + colors[i] + ';">' + labels[i] + ': ' + pct + '%</div>';
+    }).join('');
+
+    // Update hidden output with current values
+    const result = {};
+    keys.forEach((k, i) => { result[k] = Math.round(values[i] * 10000) / 10000; });
+    output.textContent = JSON.stringify(result);
+  }
+
+  function handleMove(clientX, clientY) {
+    if (dragging < 0) return;
+    const rect = svg.getBoundingClientRect();
+    const mx = (clientX - rect.left) * (280 / rect.width) - CX;
+    const my = (clientY - rect.top) * (280 / rect.height) - CY;
+    let angle = Math.atan2(mx, -my) * 180 / Math.PI;
+    if (angle < 0) angle += 360;
+
+    const i = dragging;
+    const next = (i + 1) % values.length;
+
+    // Calculate the start angle of slice i
+    let startOfI = 0;
+    for (let j = 0; j < i; j++) startOfI += values[j] * 360;
+
+    // Calculate the end angle of slice next
+    let endOfNext = 0;
+    for (let j = 0; j <= next; j++) endOfNext += values[j] * 360;
+    if (next <= i) endOfNext += 360; // wrapping
+
+    // New boundary angle
+    let newBoundary = angle;
+
+    // Minimum slice size = 2% of total
+    const minSlice = 0.02;
+    const minAngle = minSlice * 360;
+
+    let newValI = (newBoundary - startOfI);
+    if (newValI < 0) newValI += 360;
+    let newValNext = (endOfNext - newBoundary);
+    if (newValNext < 0) newValNext += 360;
+
+    if (newValI < minAngle || newValNext < minAngle) return;
+
+    values[i] = newValI / 360;
+    values[next] = newValNext / 360;
+
+    // Re-normalize
+    total = values.reduce((a, b) => a + b, 0);
+    values = values.map(v => v / total);
+
+    render();
+  }
+
+  document.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
+  document.addEventListener('touchmove', (e) => {
+    if (dragging >= 0 && e.touches.length > 0) {
+      e.preventDefault();
+      handleMove(e.touches[0].clientX, e.touches[0].clientY);
+    }
+  }, {passive: false});
+
+  function stopDrag() {
+    if (dragging >= 0) {
+      dragging = -1;
+      // Send values back to Streamlit
+      const result = {};
+      keys.forEach((k, i) => { result[k] = Math.round(values[i] * 10000) / 10000; });
+      // Use Streamlit component messaging
+      if (window.parent) {
+        window.parent.postMessage({type: 'streamlit:setComponentValue', value: result}, '*');
+      }
+    }
+  }
+  document.addEventListener('mouseup', stopDrag);
+  document.addEventListener('touchend', stopDrag);
+
+  render();
+})();
+</script>
+<style>
+  #pie-container { font-family: 'Inter', sans-serif; }
+</style>
+"""
+
+# Render the interactive pie chart
+_pie_result = components.html(_interactive_pie_html, height=400, scrolling=False)
+
+# Since streamlit.components.v1.html doesn't return values directly,
+# we provide number inputs as a compact fallback for precise control
+st.sidebar.markdown("**Fine-tune values:**")
+_cols = st.sidebar.columns(2)
+for idx, key in enumerate(_pie_keys):
+    with _cols[idx % 2]:
+        st.session_state.weights[key] = st.number_input(
+            METRIC_LABELS[key],
+            min_value=0.0,
+            max_value=1.0,
+            value=st.session_state.weights.get(key, DEFAULT_WEIGHTS[key]),
+            step=0.01,
+            format="%.2f",
+            key=f"num_{key}",
+        )
 
 # Normalise so they sum to 1
 raw_total = sum(st.session_state.weights.values())
@@ -213,40 +436,9 @@ if raw_total > 0:
 else:
     normalized_weights = {k: round(1.0 / len(DEFAULT_WEIGHTS), 4) for k in DEFAULT_WEIGHTS}
 
-# ── Interactive donut / pie chart for normalised weights ──────────────────────
+# Weight chips summary
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Effective Weight Distribution")
-
-pie_labels = [METRIC_LABELS[k] for k in normalized_weights]
-pie_values = list(normalized_weights.values())
-pie_colors = [METRIC_COLORS[k] for k in normalized_weights]
-
-fig_pie = go.Figure(
-    data=[
-        go.Pie(
-            labels=pie_labels,
-            values=pie_values,
-            hole=0.45,
-            marker=dict(colors=pie_colors, line=dict(color="#0d1117", width=2)),
-            textinfo="label+percent",
-            textposition="outside",
-            textfont=dict(size=11, color="#c9d1d9"),
-            hovertemplate="<b>%{label}</b><br>Weight: %{value:.2%}<extra></extra>",
-            pull=[0.03] * len(pie_values),
-        )
-    ]
-)
-fig_pie.update_layout(
-    showlegend=False,
-    margin=dict(t=10, b=10, l=10, r=10),
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    height=320,
-    font=dict(color="#c9d1d9"),
-)
-st.sidebar.plotly_chart(fig_pie, use_container_width=True)
-
-# Weight chips summary
 chips_html = "".join(
     f'<span class="weight-chip">{METRIC_LABELS[k]}: {v:.0%}</span>'
     for k, v in normalized_weights.items()
@@ -567,13 +759,38 @@ with tab2:
                         status_text.text(f"Processing row {index + 1}/{len(df_csv)}: {audio_id}")
 
                         try:
-                            # Download audio to temp file
-                            response = requests.get(audio_url, timeout=60)
-                            response.raise_for_status()
+                            # Download audio to temp file using streaming to avoid memory issues
+                            download_success = False
+                            last_download_err = None
+                            for attempt in range(1, 4):  # up to 3 retries
+                                try:
+                                    with requests.get(
+                                        audio_url,
+                                        stream=True,
+                                        timeout=(15, 120),  # (connect, read) timeouts
+                                        headers={"User-Agent": "TranscriptionApp/1.0"},
+                                        allow_redirects=True,
+                                    ) as dl_resp:
+                                        dl_resp.raise_for_status()
+                                        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                                            for chunk in dl_resp.iter_content(chunk_size=65536):
+                                                if chunk:
+                                                    tmp_file.write(chunk)
+                                            batch_tmp_path = Path(tmp_file.name)
+                                    download_success = True
+                                    break
+                                except (requests.RequestException, IOError) as dl_err:
+                                    last_download_err = dl_err
+                                    if batch_tmp_path is not None and batch_tmp_path.exists():
+                                        os.remove(batch_tmp_path)
+                                        batch_tmp_path = None
+                                    if attempt < 3:
+                                        time.sleep(2 ** attempt)  # exponential back-off
 
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-                                tmp_file.write(response.content)
-                                batch_tmp_path = Path(tmp_file.name)
+                            if not download_success:
+                                raise RuntimeError(
+                                    f"Failed to download audio after 3 attempts: {last_download_err}"
+                                )
 
                             # Detect language
                             lang_code, lang_name = detect_language_for_file(
