@@ -79,7 +79,7 @@ SENTENCE_MODEL_NAME = "paraphrase-multilingual-mpnet-base-v2"
 # Multilingual LM for perplexity-based fluency — supports 50+ languages.
 # Set USE_LM_PERPLEXITY = True to enable (slower, requires ~2GB memory).
 FLUENCY_LM_NAME = "ai-forever/mGPT"
-USE_LM_PERPLEXITY = False
+USE_LM_PERPLEXITY = True
 
 # Lazy-loaded singletons
 _sentence_model: Optional[SentenceTransformer] = None
@@ -210,9 +210,14 @@ def compute_alignment_score(reference: str, candidate: str) -> float:
 
 def compute_completeness_score(reference: str, candidate: str) -> float:
     """
-    Weighted coverage: word recall (0.5) + entity recall (0.3) + number recall (0.2).
-    Falls back to word (0.7) + number (0.3) if spaCy is unavailable.
+    Weighted coverage: word recall (0.6) + entity recall (0.4).
+    Falls back to word (1.0) if spaCy is unavailable.
     """
+    if not reference and not candidate:
+        return 1.0
+    if not candidate:
+        return 0.0
+
     ref_words = reference.split() if reference else []
     cand_words = candidate.split() if candidate else []
 
@@ -224,15 +229,6 @@ def compute_completeness_score(reference: str, candidate: str) -> float:
     else:
         ref_c, cand_c = Counter(ref_words), Counter(cand_words)
         word_recall = sum(min(ref_c[w], cand_c[w]) for w in ref_c) / len(ref_words)
-
-    # Number recall
-    ref_nums = re.findall(r"\b\d+(?:\.\d+)?\b", reference)
-    cand_nums = re.findall(r"\b\d+(?:\.\d+)?\b", candidate)
-    if not ref_nums:
-        number_recall = 1.0
-    else:
-        ref_nc, cand_nc = Counter(ref_nums), Counter(cand_nums)
-        number_recall = sum(min(ref_nc[n], cand_nc[n]) for n in ref_nc) / len(ref_nums)
 
     # Entity recall (spaCy optional)
     try:
@@ -250,9 +246,9 @@ def compute_completeness_score(reference: str, candidate: str) -> float:
         entity_recall, has_entities = 1.0, False
 
     if has_entities:
-        score = 0.50 * word_recall + 0.30 * entity_recall + 0.20 * number_recall
+        score = 0.60 * word_recall + 0.40 * entity_recall
     else:
-        score = 0.70 * word_recall + 0.30 * number_recall
+        score = 1.0 * word_recall
 
     return round(max(0.0, min(1.0, score)), 6)
 

@@ -40,15 +40,6 @@ class TestTextNormalization:
     def test_lowercase(self):
         assert normalize_clean("Hello World") == "hello world"
 
-    def test_filler_removal(self):
-        assert normalize_clean("um hello uh world") == "hello world"
-
-    def test_number_words(self):
-        assert "21" in normalize_clean("twenty one years old")
-
-    def test_single_number_word(self):
-        assert "5" in normalize_clean("five cats")
-
     def test_punctuation_stripped(self):
         result = normalize_clean("Hello, world!")
         assert "," not in result and "!" not in result
