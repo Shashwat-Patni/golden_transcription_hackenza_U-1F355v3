@@ -25,8 +25,11 @@ import sys
 # TF's CUDA/protobuf messages are emitted by shared libraries at import time,
 # so os.environ changes in Python are too late. Re-launching the process with
 # the correct env vars already in place prevents TF from initialising at all.
+#
+# NOTE: We skip re-execution if we detect a Streamlit environment, as
+# os.execve() bypasses the Streamlit runner and breaks session state.
 _SENTINEL = "__TF_SILENCED__"
-if _SENTINEL not in os.environ:
+if _SENTINEL not in os.environ and "streamlit" not in sys.modules:
     env = {
         **os.environ,
         _SENTINEL:                                 "1",
