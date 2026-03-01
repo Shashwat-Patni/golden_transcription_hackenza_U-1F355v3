@@ -1,3 +1,6 @@
 .venv
 **/.DS_Store__pycache__/
 *.pyc
+wav_files/
+.venv
+**/.DS_Store
