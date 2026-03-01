@@ -65,10 +65,10 @@ Normalization must be identical for reference and candidates.
 
 Normalize:
 	•	lowercase
-	•	remove filler noise tokens (uh, um)
-	•	normalize numbers (“twenty one” → “21”)
 	•	strip extra whitespace
 	•	standardize punctuation spacing
+
+**Limitation:** Filler noise tokens removal (uh, um) and number normalization ("twenty one" -> "21") are currently not supported due to the system's multilingual nature.
 
 Maintain two versions:
 	•	clean text (for WER/CER)
