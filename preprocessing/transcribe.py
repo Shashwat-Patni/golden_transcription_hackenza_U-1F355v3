@@ -26,7 +26,7 @@ import sys
 # so os.environ changes in Python are too late. Re-launching the process with
 # the correct env vars already in place prevents TF from initialising at all.
 _SENTINEL = "__TF_SILENCED__"
-if _SENTINEL not in os.environ:
+if _SENTINEL not in os.environ and "streamlit" not in sys.modules:
     env = {
         **os.environ,
         _SENTINEL:                                 "1",
@@ -107,7 +107,7 @@ def build_pipeline(model_path: Path):
 
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         model_id,
-        torch_dtype=torch_dtype,
+        torch_dtype=torch_dtype, # Keep torch_dtype here
         use_safetensors=True,
         local_files_only=local_only,
     ).to(device)
@@ -122,11 +122,10 @@ def build_pipeline(model_path: Path):
         model=model,
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
-        torch_dtype=torch_dtype,
+        dtype=torch_dtype,       # <-- CHANGED from torch_dtype to dtype
         device=device,
     )
     return asr, model, processor, device, torch_dtype
-
 
 def detect_language_for_file(wav_path: Path, model, processor, device, torch_dtype) -> tuple[str, str]:
     """Detect the spoken language in *wav_path* using Whisper's language-id head.
