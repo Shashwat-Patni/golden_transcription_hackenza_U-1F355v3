@@ -157,7 +157,7 @@ st.sidebar.markdown("## Scoring Configuration")
 
 preset = st.sidebar.selectbox(
     "Load Preset",
-    ["Custom", "accuracy_focused", "readability_focused", "semantic_fidelity"],
+    ["Custom", "default", "accuracy_focused", "readability_focused", "semantic_fidelity"],
     help="Choose a preset or customise weights manually.",
 )
 
@@ -176,6 +176,7 @@ METRIC_LABELS = {
     "semantic_similarity": "Semantic Similarity",
     "precision": "Precision",
     "recall": "Recall",
+    "alignment": "Alignment",
     "fluency": "Fluency",
     "punctuation": "Punctuation",
 }
@@ -187,6 +188,7 @@ METRIC_COLORS = {
     "semantic_similarity": "#58a6ff",
     "precision": "#d2a8ff",
     "recall": "#79c0ff",
+    "alignment": "#56d364",
     "fluency": "#f0883e",
     "punctuation": "#e3b341",
 }
@@ -198,113 +200,120 @@ st.sidebar.caption("Drag the boundaries between slices on the pie chart to adjus
 import streamlit.components.v1 as components
 import json
 
-# Build the interactive pie chart HTML/JS component
-_pie_keys = list(DEFAULT_WEIGHTS.keys())
-_pie_labels = [METRIC_LABELS[k] for k in _pie_keys]
-_pie_colors = [METRIC_COLORS[k] for k in _pie_keys]
+# Build the interactive movable pie chart HTML/JS component
+_pie_keys = list(st.session_state.weights.keys())
+_pie_labels = [METRIC_LABELS.get(k, k) for k in _pie_keys]
+_pie_colors = [METRIC_COLORS.get(k, "#888") for k in _pie_keys]
 _pie_values = [st.session_state.weights[k] for k in _pie_keys]
 
-_interactive_pie_html = """
+_movable_pie_html = """
 <div id="pie-container" style="width:100%;display:flex;flex-direction:column;align-items:center;user-select:none;">
-  <svg id="pie-svg" width="280" height="280" viewBox="0 0 280 280"></svg>
-  <div id="pie-legend" style="margin-top:8px;width:100%;"></div>
-  <div id="pie-output" style="display:none;"></div>
+  <svg id="pie-svg" width="300" height="300" viewBox="0 0 300 300"></svg>
+  <div id="pie-legend" style="margin-top:10px;width:100%;text-align:center;"></div>
 </div>
 <script>
 (function() {
-  const CX = 140, CY = 140, R = 110, INNER_R = 50;
-  const HANDLE_R = 8;
+  const size = 300;
+  const radius = size / 2;
   const keys = """ + json.dumps(_pie_keys) + """;
   const labels = """ + json.dumps(_pie_labels) + """;
   const colors = """ + json.dumps(_pie_colors) + """;
-  let values = """ + json.dumps(_pie_values) + """;
 
-  // Normalize values
-  let total = values.reduce((a, b) => a + b, 0);
-  if (total <= 0) { values = values.map(() => 1.0 / values.length); total = 1; }
-  else { values = values.map(v => v / total); }
+  // Initial slice percentages from weights (normalised to sum to 100)
+  let rawValues = """ + json.dumps(_pie_values) + """;
+  let rawTotal = rawValues.reduce((a,b) => a+b, 0);
+  let slices = rawValues.map(v => rawTotal > 0 ? (v / rawTotal) * 100 : 100 / rawValues.length);
 
   const svg = document.getElementById('pie-svg');
   const legend = document.getElementById('pie-legend');
-  const output = document.getElementById('pie-output');
-  let dragging = -1;
+  let draggingIndex = -1;
 
-  function toRad(deg) { return deg * Math.PI / 180; }
+  function toRadians(deg) { return (deg * Math.PI) / 180; }
 
-  function polarToCart(cx, cy, r, angleDeg) {
-    const rad = toRad(angleDeg - 90);
-    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+  function polarToCartesian(cx, cy, r, angle) {
+    return {
+      x: cx + r * Math.cos(toRadians(angle)),
+      y: cy + r * Math.sin(toRadians(angle))
+    };
   }
 
-  function describeArc(cx, cy, outerR, innerR, startAngle, endAngle) {
-    const sweep = endAngle - startAngle;
-    const largeArc = sweep > 180 ? 1 : 0;
-    const outerStart = polarToCart(cx, cy, outerR, startAngle);
-    const outerEnd = polarToCart(cx, cy, outerR, endAngle);
-    const innerStart = polarToCart(cx, cy, innerR, endAngle);
-    const innerEnd = polarToCart(cx, cy, innerR, startAngle);
+  function describeArc(startAngle, endAngle) {
+    const start = polarToCartesian(radius, radius, radius, endAngle);
+    const end   = polarToCartesian(radius, radius, radius, startAngle);
+    const largeArcFlag = (endAngle - startAngle) <= 180 ? "0" : "1";
     return [
-      `M ${outerStart.x} ${outerStart.y}`,
-      `A ${outerR} ${outerR} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
-      `L ${innerStart.x} ${innerStart.y}`,
-      `A ${innerR} ${innerR} 0 ${largeArc} 0 ${innerEnd.x} ${innerEnd.y}`,
-      'Z'
-    ].join(' ');
+      "M", radius, radius,
+      "L", start.x, start.y,
+      "A", radius, radius, 0, largeArcFlag, 0, end.x, end.y,
+      "Z"
+    ].join(" ");
+  }
+
+  function getAngles() {
+    let total = 0;
+    return slices.map(value => {
+      const start = total;
+      total += (value / 100) * 360;
+      return { start, end: total };
+    });
   }
 
   function render() {
     svg.innerHTML = '';
-    let startAngle = 0;
-    const angles = [];
+    const angles = getAngles();
 
     // Draw slices
-    for (let i = 0; i < values.length; i++) {
-      const sliceAngle = values[i] * 360;
-      const endAngle = startAngle + sliceAngle;
-      angles.push({ start: startAngle, end: endAngle });
+    for (let i = 0; i < slices.length; i++) {
+      const a = angles[i];
+      if (a.end - a.start < 0.1) continue;
 
-      if (sliceAngle > 0.5) {
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', describeArc(CX, CY, R, INNER_R, startAngle, endAngle));
-        path.setAttribute('fill', colors[i]);
-        path.setAttribute('stroke', '#0d1117');
-        path.setAttribute('stroke-width', '2');
-        path.style.cursor = 'default';
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', describeArc(a.start, a.end));
+      path.setAttribute('fill', colors[i]);
+      path.setAttribute('stroke', '#0d1117');
+      path.setAttribute('stroke-width', '1.5');
 
-        // Label
-        const midAngle = startAngle + sliceAngle / 2;
-        const labelR = (R + INNER_R) / 2;
-        const lp = polarToCart(CX, CY, labelR, midAngle);
-        const pct = (values[i] * 100).toFixed(0);
-        if (sliceAngle > 20) {
-          const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          text.setAttribute('x', lp.x);
-          text.setAttribute('y', lp.y);
-          text.setAttribute('text-anchor', 'middle');
-          text.setAttribute('dominant-baseline', 'central');
-          text.setAttribute('fill', '#fff');
-          text.setAttribute('font-size', '11');
-          text.setAttribute('font-weight', '600');
-          text.setAttribute('pointer-events', 'none');
-          text.textContent = pct + '%';
-          svg.appendChild(path);
-          svg.appendChild(text);
-        } else {
-          svg.appendChild(path);
-        }
+      // Hover tooltip
+      path.addEventListener('mouseenter', () => {
+        path.setAttribute('opacity', '0.85');
+      });
+      path.addEventListener('mouseleave', () => {
+        path.setAttribute('opacity', '1');
+      });
+
+      svg.appendChild(path);
+
+      // Label inside slice
+      const sliceAngle = a.end - a.start;
+      if (sliceAngle > 25) {
+        const midAngle = a.start + sliceAngle / 2;
+        const labelR = radius * 0.6;
+        const lp = polarToCartesian(radius, radius, labelR, midAngle);
+        const pct = slices[i].toFixed(1);
+
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', lp.x);
+        text.setAttribute('y', lp.y);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('dominant-baseline', 'central');
+        text.setAttribute('fill', '#fff');
+        text.setAttribute('font-size', '10');
+        text.setAttribute('font-weight', '600');
+        text.setAttribute('pointer-events', 'none');
+        text.textContent = pct + '%';
+        svg.appendChild(text);
       }
-      startAngle = endAngle;
     }
 
-    // Draw draggable boundary handles
-    for (let i = 0; i < values.length; i++) {
-      const boundaryAngle = angles[i].end;
-      const hp = polarToCart(CX, CY, (R + INNER_R) / 2, boundaryAngle);
+    // Draw draggable separator handles at each boundary
+    for (let i = 0; i < slices.length; i++) {
+      const boundaryAngle = angles[i].end % 360;
+      const pos = polarToCartesian(radius, radius, radius, boundaryAngle);
 
       const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('cx', hp.x);
-      circle.setAttribute('cy', hp.y);
-      circle.setAttribute('r', HANDLE_R);
+      circle.setAttribute('cx', pos.x);
+      circle.setAttribute('cy', pos.y);
+      circle.setAttribute('r', 7);
       circle.setAttribute('fill', '#e6edf3');
       circle.setAttribute('stroke', '#0d1117');
       circle.setAttribute('stroke-width', '2');
@@ -313,105 +322,91 @@ _interactive_pie_html = """
 
       circle.addEventListener('mousedown', (e) => {
         e.preventDefault();
-        dragging = parseInt(circle.dataset.index);
-        circle.style.cursor = 'grabbing';
+        draggingIndex = parseInt(circle.dataset.index);
       });
       circle.addEventListener('touchstart', (e) => {
         e.preventDefault();
-        dragging = parseInt(circle.dataset.index);
+        draggingIndex = parseInt(circle.dataset.index);
       }, {passive: false});
+
       svg.appendChild(circle);
     }
 
     // Update legend
     legend.innerHTML = keys.map((k, i) => {
-      const pct = (values[i] * 100).toFixed(1);
-      return '<div style="display:inline-block;background:rgba(56,139,253,0.12);border:1px solid ' + colors[i] + '40;border-radius:999px;padding:2px 8px;margin:2px;font-size:12px;color:' + colors[i] + ';">' + labels[i] + ': ' + pct + '%</div>';
-    }).join('');
-
-    // Update hidden output with current values
-    const result = {};
-    keys.forEach((k, i) => { result[k] = Math.round(values[i] * 10000) / 10000; });
-    output.textContent = JSON.stringify(result);
+      const pct = slices[i].toFixed(1);
+      return '<span style="display:inline-block;background:rgba(56,139,253,0.12);border:1px solid ' + colors[i] + '40;border-radius:999px;padding:2px 8px;margin:2px;font-size:11px;color:' + colors[i] + ';white-space:nowrap;">' + labels[i] + ': ' + pct + '%</span>';
+    }).join(' ');
   }
 
-  function handleMove(clientX, clientY) {
-    if (dragging < 0) return;
+  function handleMouseMove(e) {
+    if (draggingIndex < 0) return;
     const rect = svg.getBoundingClientRect();
-    const mx = (clientX - rect.left) * (280 / rect.width) - CX;
-    const my = (clientY - rect.top) * (280 / rect.height) - CY;
-    let angle = Math.atan2(mx, -my) * 180 / Math.PI;
-    if (angle < 0) angle += 360;
+    const cx = rect.left + radius * (rect.width / size);
+    const cy = rect.top + radius * (rect.height / size);
 
-    const i = dragging;
-    const next = (i + 1) % values.length;
+    let angle = Math.atan2(e.clientY - cy, e.clientX - cx) * (180 / Math.PI);
+    angle = (angle + 360) % 360;
 
-    // Calculate the start angle of slice i
-    let startOfI = 0;
-    for (let j = 0; j < i; j++) startOfI += values[j] * 360;
+    const angles = getAngles();
+    const i = draggingIndex;
+    const next = (i + 1) % slices.length;
 
-    // Calculate the end angle of slice next
-    let endOfNext = 0;
-    for (let j = 0; j <= next; j++) endOfNext += values[j] * 360;
-    if (next <= i) endOfNext += 360; // wrapping
+    const A = angles[i].start;
+    const C = angles[next].end % 360;
 
-    // New boundary angle
-    let newBoundary = angle;
+    let span = C - A;
+    if (span <= 0) span += 360;
 
-    // Minimum slice size = 2% of total
-    const minSlice = 0.02;
-    const minAngle = minSlice * 360;
+    let newI = angle - A;
+    if (newI < 0) newI += 360;
 
-    let newValI = (newBoundary - startOfI);
-    if (newValI < 0) newValI += 360;
-    let newValNext = (endOfNext - newBoundary);
-    if (newValNext < 0) newValNext += 360;
+    // Prevent collapse — minimum 2% per slice
+    if (newI < 5 || newI > span - 5) return;
 
-    if (newValI < minAngle || newValNext < minAngle) return;
-
-    values[i] = newValI / 360;
-    values[next] = newValNext / 360;
-
-    // Re-normalize
-    total = values.reduce((a, b) => a + b, 0);
-    values = values.map(v => v / total);
+    const pairTotal = slices[i] + slices[next];
+    slices[i] = (newI / span) * pairTotal;
+    slices[next] = pairTotal - slices[i];
 
     render();
   }
 
-  document.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
-  document.addEventListener('touchmove', (e) => {
-    if (dragging >= 0 && e.touches.length > 0) {
-      e.preventDefault();
-      handleMove(e.touches[0].clientX, e.touches[0].clientY);
-    }
-  }, {passive: false});
-
-  function stopDrag() {
-    if (dragging >= 0) {
-      dragging = -1;
-      // Send values back to Streamlit
+  function handleMouseUp() {
+    if (draggingIndex >= 0) {
+      draggingIndex = -1;
+      // Post updated weights to parent (Streamlit)
+      const totalPct = slices.reduce((a,b) => a+b, 0);
       const result = {};
-      keys.forEach((k, i) => { result[k] = Math.round(values[i] * 10000) / 10000; });
-      // Use Streamlit component messaging
+      keys.forEach((k, idx) => {
+        result[k] = Math.round((slices[idx] / totalPct) * 10000) / 10000;
+      });
       if (window.parent) {
         window.parent.postMessage({type: 'streamlit:setComponentValue', value: result}, '*');
       }
     }
   }
-  document.addEventListener('mouseup', stopDrag);
-  document.addEventListener('touchend', stopDrag);
+
+  document.addEventListener('mousemove', handleMouseMove);
+  document.addEventListener('touchmove', (e) => {
+    if (draggingIndex >= 0 && e.touches.length > 0) {
+      e.preventDefault();
+      handleMouseMove(e.touches[0]);
+    }
+  }, {passive: false});
+  document.addEventListener('mouseup', handleMouseUp);
+  document.addEventListener('touchend', handleMouseUp);
 
   render();
 })();
 </script>
 <style>
   #pie-container { font-family: 'Inter', sans-serif; }
+  #pie-svg { filter: drop-shadow(0 2px 8px rgba(0,0,0,0.3)); }
 </style>
 """
 
-# Render the interactive pie chart
-_pie_result = components.html(_interactive_pie_html, height=400, scrolling=False)
+# Render the movable pie chart
+_pie_result = components.html(_movable_pie_html, height=420, scrolling=False)
 
 # Since streamlit.components.v1.html doesn't return values directly,
 # we provide number inputs as a compact fallback for precise control
@@ -446,7 +441,7 @@ chips_html = "".join(
 )
 st.sidebar.markdown(chips_html, unsafe_allow_html=True)
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════���═══════════════════════════════════════════
 # MAIN TABS
 # ═══════════════════════════════════════════════════════════════════════════════
 tab1, tab2 = st.tabs(["Single Transcription", "Batch Verification"])

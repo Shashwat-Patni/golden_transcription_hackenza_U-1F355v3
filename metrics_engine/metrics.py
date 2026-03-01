@@ -47,25 +47,31 @@ DEFAULT_WEIGHTS = {
     "semantic_similarity": 0.15,
     "precision":           0.10,
     "recall":              0.05,
+    "alignment":           0.00,
     "fluency":             0.05,
     "punctuation":         0.05,
 }
 
 PRESET_WEIGHTS = {
+    "default": {
+        "wer": 0.001, "cer": 0.2904, "precision": 0.001,
+        "recall": 0.001, "alignment": 0.0959, "completeness": 0.162,
+        "semantic_similarity": 0.0249, "fluency": 0.001, "punctuation": 0.4228,
+    },
     "accuracy_focused": {
         "wer": 0.40, "cer": 0.20, "completeness": 0.15,
         "semantic_similarity": 0.10, "precision": 0.10,
-        "recall": 0.05, "fluency": 0.00, "punctuation": 0.00,
+        "recall": 0.05, "alignment": 0.00, "fluency": 0.00, "punctuation": 0.00,
     },
     "readability_focused": {
         "wer": 0.10, "cer": 0.05, "completeness": 0.10,
         "semantic_similarity": 0.10, "precision": 0.05,
-        "recall": 0.05, "fluency": 0.35, "punctuation": 0.20,
+        "recall": 0.05, "alignment": 0.00, "fluency": 0.35, "punctuation": 0.20,
     },
     "semantic_fidelity": {
         "wer": 0.10, "cer": 0.05, "completeness": 0.20,
         "semantic_similarity": 0.45, "precision": 0.05,
-        "recall": 0.10, "fluency": 0.05, "punctuation": 0.00,
+        "recall": 0.10, "alignment": 0.00, "fluency": 0.05, "punctuation": 0.00,
     },
 }
 
@@ -398,7 +404,7 @@ def normalize_metrics(raw: dict) -> dict:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COMPOSITE QUALITY SCORE & RANKING
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────���─────────────────────────────────────────
 
 # Maps weight dict keys → normalized score keys
 _WEIGHT_TO_SCORE = {
