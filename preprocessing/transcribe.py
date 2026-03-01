@@ -81,7 +81,7 @@ DEFAULT_COUNT   = 5
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def build_pipeline(model_path: Path):
-    """Load whisper-large-v3 from a local snapshot.
+    """Load whisper-large-v3 from a local snapshot, or fallback to HF Hub.
 
     Returns
     -------
@@ -94,19 +94,27 @@ def build_pipeline(model_path: Path):
     device      = "cuda:0" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-    print(f"Loading model from: {model_path}")
+    # Fallback logic for environments without the pre-cached snapshot
+    model_id = str(model_path)
+    local_only = True
+    if not model_path.exists():
+        print(f"Local model snapshot not found at {model_path}. Falling back to HF Hub.")
+        model_id = "openai/whisper-large-v3"
+        local_only = False
+
+    print(f"Loading model: {model_id}")
     print(f"Device: {device}  |  dtype: {torch_dtype}\n")
 
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        str(model_path),
+        model_id,
         torch_dtype=torch_dtype,
         use_safetensors=True,
-        local_files_only=True,
+        local_files_only=local_only,
     ).to(device)
 
     processor = AutoProcessor.from_pretrained(
-        str(model_path),
-        local_files_only=True,
+        model_id,
+        local_files_only=local_only,
     )
 
     asr = pipeline(
