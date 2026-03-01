@@ -1,0 +1,302 @@
+# Transcription Quality Assessment System
+
+Rank multiple transcriptions per audio using a **Composite Quality Score (CQS)** derived from atomic quality metrics. The system generates a reference transcription, computes quality metrics per candidate, combines them into a weighted score, and provides a UI for real-time weight adjustment and re-ranking.
+
+---
+
+## Table of Contents
+
+- [Setup Instructions](#setup-instructions)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Running the Application](#running-the-application)
+  - [How to Use](#how-to-use)
+- [Technical Details](#technical-details)
+  - [Project Structure](#project-structure)
+  - [Data Model](#data-model)
+  - [Ground Truth Strategy](#ground-truth-strategy)
+  - [Text Normalization Pipeline](#text-normalization-pipeline)
+  - [Atomic Quality Metrics](#atomic-quality-metrics)
+  - [Metric Normalization](#metric-normalization)
+  - [Composite Quality Score (CQS)](#composite-quality-score-cqs)
+  - [Ranking Logic](#ranking-logic)
+  - [Pipeline Flow](#pipeline-flow)
+  - [UI Features](#ui-features)
+  - [Edge Cases](#edge-cases)
+  - [Evaluation & Calibration](#evaluation--calibration)
+  - [Performance Considerations](#performance-considerations)
+  - [Tech Stack](#tech-stack)
+
+---
+
+## Setup Instructions
+
+### Prerequisites
+
+- **Python 3.9+**
+- **[FFmpeg](https://ffmpeg.org/)** — required for audio processing by `torchaudio` and `librosa`
+
+### Installation
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd golden_transcription_hackenza_U-1F355v3
+   ```
+
+2. **Create and activate a virtual environment:**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate        # macOS / Linux
+   # venv\Scripts\activate          # Windows
+   ```
+
+3. **Install dependencies** (from the project root):
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+4. **Download the spaCy model** *(optional, for the completeness metric):*
+   ```bash
+   python -m spacy download xx_ent_wiki_sm
+   ```
+
+### Running the Application
+
+1. **Start the Streamlit server** (from the project root):
+   ```bash
+   streamlit run ui_app/app.py
+   ```
+
+2. **Open the UI** at the URL shown in the terminal (usually `http://localhost:8501`).
+
+### How to Use
+
+1. **Configure Weights** — Use the sidebar sliders to adjust metric importance (WER, Semantic Similarity, etc.) or choose a preset.
+2. **Upload Audio** — Drag and drop a `.wav` file into the "Upload Audio" section.
+3. **Provide Candidates** — Paste candidate transcriptions into the text area (one per line).
+4. **Run Assessment** — Click "Run Assessment". The app will:
+   - Generate a Ground Truth transcription using Whisper large-v3.
+   - Compute atomic metrics for each candidate against the Ground Truth.
+   - Rank candidates based on CQS and display results in a table and chart.
+
+---
+
+## Technical Details
+
+### Project Structure
+
+```
+├── preprocessing/           # Audio download & Whisper transcription
+│   ├── download_wav.py      # Download WAV files from URLs
+│   └── transcribe.py        # Generate reference transcriptions via Whisper
+├── metrics_engine/          # Metric computation & scoring API
+│   ├── metrics.py           # Atomic metric implementations
+│   ├── api.py               # Scoring API endpoint
+│   └── tests.py             # Unit tests for metrics
+├── ui_app/                  # Streamlit interactive dashboard
+│   └── app.py               # Main Streamlit application
+├── transcribe.py            # Top-level transcription helper
+├── download_wav_files.py    # Top-level WAV download helper
+├── requirements.txt         # Root-level Python dependencies
+└── README.md                # This file
+```
+
+### Data Model
+
+**Input** — For each audio sample:
+
+| Field            | Description                          |
+|------------------|--------------------------------------|
+| `audio_id`       | Unique identifier for the audio clip |
+| `audio_file`     | Path or URL to the audio file        |
+| `transcriptions` | List of candidate transcriptions     |
+
+**Output** — Per candidate transcription:
+
+| Field                  | Description                                   |
+|------------------------|-----------------------------------------------|
+| `transcription_id`     | Candidate identifier                          |
+| `WER`                  | Word Error Rate                               |
+| `CER`                  | Character Error Rate                          |
+| `precision`            | Word-level precision                          |
+| `recall`               | Word-level recall                             |
+| `fluency_score`        | Readability & grammar quality                 |
+| `punctuation_score`    | Punctuation & formatting quality              |
+| `completeness_score`   | Coverage of reference content                 |
+| `semantic_similarity`  | Meaning preservation (embedding cosine sim)   |
+| `CQS_score`            | Weighted composite quality score              |
+| `rank`                 | Final rank (1 = best)                         |
+
+---
+
+### Ground Truth Strategy
+
+A high-quality ASR model (OpenAI **Whisper large**) produces the reference transcription.
+
+1. Normalize audio to **16 kHz mono WAV**.
+2. Run Whisper (or equivalent SOTA ASR).
+3. Store the raw transcription and optional timestamps.
+
+> **Note:** The reference is not absolute truth. Metrics are designed to tolerate ASR imperfections.
+
+---
+
+### Text Normalization Pipeline
+
+Normalization is applied **identically** to both reference and candidates:
+
+- Lowercase
+- Strip extra whitespace
+- Standardize punctuation spacing
+
+Two text versions are maintained:
+- **Clean text** — for WER / CER computation
+- **Punctuated text** — for fluency / punctuation metrics
+
+> **Limitation:** Filler-noise removal (*uh, um*) and number normalization (*"twenty one" → "21"*) are not currently supported due to the system's multilingual nature.
+
+---
+
+### Atomic Quality Metrics
+
+| #   | Metric                    | Formula / Method                                              | What It Captures                        |
+|-----|---------------------------|---------------------------------------------------------------|-----------------------------------------|
+| 4.1 | **Word Error Rate (WER)** | `(S + D + I) / N` via `jiwer`                                | Word correctness, missing/extra words   |
+| 4.2 | **Character Error Rate (CER)** | `char_edits / total_chars`                               | Spelling errors, partial misrecognition |
+| 4.3 | **Precision & Recall**    | `correct_words / candidate_words`, `correct_words / ref_words`| Completeness vs. over-generation        |
+| 4.4 | **Completeness Score**    | Recall adjusted by phrase coverage                            | Coverage of reference content           |
+| 4.5 | **Semantic Similarity**   | Sentence embeddings (SBERT) + cosine similarity               | Meaning preservation                    |
+| 4.6 | **Fluency & Language Quality** | Perplexity, grammar-error detection                      | Readability, naturalness                |
+| 4.7 | **Punctuation Score**     | Sentence-boundary & comma/pause comparison                    | Formatting & readability                |
+
+---
+
+### Metric Normalization
+
+All metrics are normalized to a **0–1** scale (higher = better):
+
+| Metric              | Raw Direction | Normalization       |
+|---------------------|---------------|---------------------|
+| WER                 | Lower better  | `1 - WER`           |
+| CER                 | Lower better  | `1 - CER`           |
+| Semantic Similarity | Higher better | Unchanged           |
+| Perplexity          | Lower better  | Scaled inverse      |
+
+---
+
+### Composite Quality Score (CQS)
+
+```
+CQS = Σ (weight_i × normalized_metric_i)
+```
+
+**Default weights:**
+
+| Metric               | Weight |
+|----------------------|--------|
+| WER                  | 0.30   |
+| CER                  | 0.15   |
+| Completeness         | 0.15   |
+| Semantic Similarity  | 0.15   |
+| Precision            | 0.10   |
+| Recall               | 0.05   |
+| Fluency              | 0.05   |
+| Punctuation          | 0.05   |
+
+Weights are fully adjustable via the UI and always auto-normalize to sum to 1.
+
+---
+
+### Ranking Logic
+
+For each audio sample:
+
+```
+Compute Metrics → Normalize → Compute CQS → Sort Descending
+```
+
+**Tie-breakers** (applied in order):
+1. Higher semantic similarity
+2. Higher completeness
+3. Lower WER
+
+---
+
+### Pipeline Flow
+
+```
+Audio → Whisper Reference
+        ↓
+  Normalize Text
+        ↓
+  Compute Metrics
+        ↓
+  Normalize Metrics
+        ↓
+  Compute CQS
+        ↓
+  Rank Transcriptions
+        ↓
+  UI Display & Weight Tuning
+```
+
+---
+
+### UI Features
+
+| Feature             | Description                                                    |
+|---------------------|----------------------------------------------------------------|
+| **Weight Sliders**  | Per-metric sliders; total auto-normalizes to 1                 |
+| **Presets**         | Accuracy-focused, readability-focused, semantic-fidelity       |
+| **Real-Time Updates** | CQS recomputed instantly on slider change                   |
+| **Visualization**   | Metric breakdown per transcription; strength/weakness highlights|
+
+---
+
+### Edge Cases
+
+The system handles:
+- Heavy background noise
+- Partial speech
+- Non-verbal audio
+- Multilingual mixing
+- Named entities & numbers
+- Punctuation-free transcripts
+
+Flags are raised when applicable:
+- `low_confidence_reference`
+- `semantic_mismatch_warning`
+
+---
+
+### Evaluation & Calibration
+
+- Manually score sample outputs and compute correlation with human rankings.
+- Adjust weights based on calibration results.
+- Compare multiple ASR reference outputs to detect Whisper bias; flag large-divergence cases.
+
+---
+
+### Performance Considerations
+
+**Batch Processing**
+- Compute embeddings in batch
+- Parallelize metric computation
+- Cache reference transcriptions
+
+**Storage**
+- Persist metric values to avoid recomputation
+- Recompute only CQS when weights change
+
+---
+
+### Tech Stack
+
+| Layer    | Technology                                              |
+|----------|---------------------------------------------------------|
+| ASR      | Whisper large / faster-whisper                          |
+| Metrics  | `jiwer`, `rapidfuzz`, `sentence-transformers`, `spacy`  |
+| Backend  | Python, vectorized metric pipeline                      |
+| Frontend | Streamlit with interactive sliders and real-time charts  |
