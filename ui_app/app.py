@@ -193,69 +193,241 @@ METRIC_COLORS = {
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Adjust Metric Weights")
+st.sidebar.caption("Drag the boundaries between slices on the pie chart to adjust weights.")
 
+import streamlit.components.v1 as components
+import json
+
+# Build the interactive movable pie chart HTML/JS component
 _pie_keys = list(st.session_state.weights.keys())
 _pie_labels = [METRIC_LABELS.get(k, k) for k in _pie_keys]
 _pie_colors = [METRIC_COLORS.get(k, "#888") for k in _pie_keys]
+_pie_values = [st.session_state.weights[k] for k in _pie_keys]
 
-# Normalise weights initially if they don't sum to 1
-_total = sum(st.session_state.weights.values())
-if abs(_total - 1.0) > 0.001 and _total > 0:
-    st.session_state.weights = {k: v / _total for k, v in st.session_state.weights.items()}
+_movable_pie_html = """
+<div id="pie-container" style="width:100%;display:flex;flex-direction:column;align-items:center;user-select:none;">
+  <svg id="pie-svg" width="300" height="300" viewBox="0 0 300 300"></svg>
+  <div id="pie-legend" style="margin-top:10px;width:100%;text-align:center;"></div>
+</div>
+<script>
+(function() {
+  const size = 300;
+  const radius = size / 2;
+  const keys = """ + json.dumps(_pie_keys) + """;
+  const labels = """ + json.dumps(_pie_labels) + """;
+  const colors = """ + json.dumps(_pie_colors) + """;
 
-# Display Pie Chart using Plotly
-fig_sidebar = go.Figure(
-    data=[
-        go.Pie(
-            labels=_pie_labels,
-            values=[st.session_state.weights[k] for k in _pie_keys],
-            marker=dict(colors=_pie_colors, line=dict(color="#0d1117", width=2)),
-            hole=0.4,
-            textinfo="percent",
-            hoverinfo="label+value",
-        )
-    ]
-)
-fig_sidebar.update_layout(
-    showlegend=False,
-    margin=dict(t=0, b=0, l=10, r=10),
-    height=280,
-    paper_bgcolor="rgba(0,0,0,0)",
-)
-st.sidebar.plotly_chart(fig_sidebar, use_container_width=True)
+  // Initial slice percentages from weights (normalised to sum to 100)
+  let rawValues = """ + json.dumps(_pie_values) + """;
+  let rawTotal = rawValues.reduce((a,b) => a+b, 0);
+  let slices = rawValues.map(v => rawTotal > 0 ? (v / rawTotal) * 100 : 100 / rawValues.length);
 
+  const svg = document.getElementById('pie-svg');
+  const legend = document.getElementById('pie-legend');
+  let draggingIndex = -1;
+
+  function toRadians(deg) { return (deg * Math.PI) / 180; }
+
+  function polarToCartesian(cx, cy, r, angle) {
+    return {
+      x: cx + r * Math.cos(toRadians(angle)),
+      y: cy + r * Math.sin(toRadians(angle))
+    };
+  }
+
+  function describeArc(startAngle, endAngle) {
+    const start = polarToCartesian(radius, radius, radius, endAngle);
+    const end   = polarToCartesian(radius, radius, radius, startAngle);
+    const largeArcFlag = (endAngle - startAngle) <= 180 ? "0" : "1";
+    return [
+      "M", radius, radius,
+      "L", start.x, start.y,
+      "A", radius, radius, 0, largeArcFlag, 0, end.x, end.y,
+      "Z"
+    ].join(" ");
+  }
+
+  function getAngles() {
+    let total = 0;
+    return slices.map(value => {
+      const start = total;
+      total += (value / 100) * 360;
+      return { start, end: total };
+    });
+  }
+
+  function render() {
+    svg.innerHTML = '';
+    const angles = getAngles();
+
+    // Draw slices
+    for (let i = 0; i < slices.length; i++) {
+      const a = angles[i];
+      if (a.end - a.start < 0.1) continue;
+
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', describeArc(a.start, a.end));
+      path.setAttribute('fill', colors[i]);
+      path.setAttribute('stroke', '#0d1117');
+      path.setAttribute('stroke-width', '1.5');
+
+      // Hover tooltip
+      path.addEventListener('mouseenter', () => {
+        path.setAttribute('opacity', '0.85');
+      });
+      path.addEventListener('mouseleave', () => {
+        path.setAttribute('opacity', '1');
+      });
+
+      svg.appendChild(path);
+
+      // Label inside slice
+      const sliceAngle = a.end - a.start;
+      if (sliceAngle > 25) {
+        const midAngle = a.start + sliceAngle / 2;
+        const labelR = radius * 0.6;
+        const lp = polarToCartesian(radius, radius, labelR, midAngle);
+        const pct = slices[i].toFixed(1);
+
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', lp.x);
+        text.setAttribute('y', lp.y);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('dominant-baseline', 'central');
+        text.setAttribute('fill', '#fff');
+        text.setAttribute('font-size', '10');
+        text.setAttribute('font-weight', '600');
+        text.setAttribute('pointer-events', 'none');
+        text.textContent = pct + '%';
+        svg.appendChild(text);
+      }
+    }
+
+    // Draw draggable separator handles at each boundary
+    for (let i = 0; i < slices.length; i++) {
+      const boundaryAngle = angles[i].end % 360;
+      const pos = polarToCartesian(radius, radius, radius, boundaryAngle);
+
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', pos.x);
+      circle.setAttribute('cy', pos.y);
+      circle.setAttribute('r', 7);
+      circle.setAttribute('fill', '#e6edf3');
+      circle.setAttribute('stroke', '#0d1117');
+      circle.setAttribute('stroke-width', '2');
+      circle.style.cursor = 'grab';
+      circle.dataset.index = i;
+
+      circle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        draggingIndex = parseInt(circle.dataset.index);
+      });
+      circle.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        draggingIndex = parseInt(circle.dataset.index);
+      }, {passive: false});
+
+      svg.appendChild(circle);
+    }
+
+    // Update legend
+    legend.innerHTML = keys.map((k, i) => {
+      const pct = slices[i].toFixed(1);
+      return '<span style="display:inline-block;background:rgba(56,139,253,0.12);border:1px solid ' + colors[i] + '40;border-radius:999px;padding:2px 8px;margin:2px;font-size:11px;color:' + colors[i] + ';white-space:nowrap;">' + labels[i] + ': ' + pct + '%</span>';
+    }).join(' ');
+  }
+
+  function handleMouseMove(e) {
+    if (draggingIndex < 0) return;
+    const rect = svg.getBoundingClientRect();
+    const cx = rect.left + radius * (rect.width / size);
+    const cy = rect.top + radius * (rect.height / size);
+
+    let angle = Math.atan2(e.clientY - cy, e.clientX - cx) * (180 / Math.PI);
+    angle = (angle + 360) % 360;
+
+    const angles = getAngles();
+    const i = draggingIndex;
+    const next = (i + 1) % slices.length;
+
+    const A = angles[i].start;
+    const C = angles[next].end % 360;
+
+    let span = C - A;
+    if (span <= 0) span += 360;
+
+    let newI = angle - A;
+    if (newI < 0) newI += 360;
+
+    // Prevent collapse — minimum 2% per slice
+    if (newI < 5 || newI > span - 5) return;
+
+    const pairTotal = slices[i] + slices[next];
+    slices[i] = (newI / span) * pairTotal;
+    slices[next] = pairTotal - slices[i];
+
+    render();
+  }
+
+  function handleMouseUp() {
+    if (draggingIndex >= 0) {
+      draggingIndex = -1;
+      // Post updated weights to parent (Streamlit)
+      const totalPct = slices.reduce((a,b) => a+b, 0);
+      const result = {};
+      keys.forEach((k, idx) => {
+        result[k] = Math.round((slices[idx] / totalPct) * 10000) / 10000;
+      });
+      if (window.parent) {
+        window.parent.postMessage({type: 'streamlit:setComponentValue', value: result}, '*');
+      }
+    }
+  }
+
+  document.addEventListener('mousemove', handleMouseMove);
+  document.addEventListener('touchmove', (e) => {
+    if (draggingIndex >= 0 && e.touches.length > 0) {
+      e.preventDefault();
+      handleMouseMove(e.touches[0]);
+    }
+  }, {passive: false});
+  document.addEventListener('mouseup', handleMouseUp);
+  document.addEventListener('touchend', handleMouseUp);
+
+  render();
+})();
+</script>
+<style>
+  #pie-container { font-family: 'Inter', sans-serif; }
+  #pie-svg { filter: drop-shadow(0 2px 8px rgba(0,0,0,0.3)); }
+</style>
+"""
+
+# Render the movable pie chart
+_pie_result = components.html(_movable_pie_html, height=420, scrolling=False)
+
+# Since streamlit.components.v1.html doesn't return values directly,
+# we provide number inputs as a compact fallback for precise control
 st.sidebar.markdown("**Fine-tune values:**")
 _cols = st.sidebar.columns(2)
-
-def update_weights():
-    # Collect all current values from number inputs
-    raw_vals = {k: st.session_state[f"num_{k}"] for k in _pie_keys}
-    total = sum(raw_vals.values())
-    if total > 0:
-        # Normalize and update session state
-        for k in _pie_keys:
-            st.session_state.weights[k] = raw_vals[k] / total
-    else:
-        # Fallback if all are zero
-        for k in _pie_keys:
-            st.session_state.weights[k] = 1.0 / len(_pie_keys)
-
 for idx, key in enumerate(_pie_keys):
     with _cols[idx % 2]:
-        # We use a key for the number input and a callback to update the actual weights
-        st.number_input(
+        st.session_state.weights[key] = st.number_input(
             METRIC_LABELS[key],
             min_value=0.0,
             max_value=1.0,
-            value=float(st.session_state.weights.get(key, DEFAULT_WEIGHTS[key])),
+            value=st.session_state.weights.get(key, DEFAULT_WEIGHTS[key]),
             step=0.01,
             format="%.2f",
             key=f"num_{key}",
-            on_change=update_weights
         )
 
-# Use current weights as normalized weights for processing
-normalized_weights = st.session_state.weights
+# Normalise so they sum to 1
+raw_total = sum(st.session_state.weights.values())
+if raw_total > 0:
+    normalized_weights = {k: round(v / raw_total, 4) for k, v in st.session_state.weights.items()}
+else:
+    normalized_weights = {k: round(1.0 / len(DEFAULT_WEIGHTS), 4) for k in DEFAULT_WEIGHTS}
 
 # Weight chips summary
 st.sidebar.markdown("---")
@@ -321,10 +493,9 @@ with tab1:
                     del st.session_state[k]
             st.rerun()
 
-        if st.session_state.single_candidates and st.session_state.single_candidates[-1].strip():
-            if st.button("➕ Add Transcription"):
-                st.session_state.single_candidates.append("")
-                st.rerun()
+        if st.button("➕ Add Transcription"):
+            st.session_state.single_candidates.append("")
+            st.rerun()
 
     # Run button
     run_single = st.button("Run Assessment", key="run_single", use_container_width=True)
