@@ -45,6 +45,7 @@ import argparse
 import time
 import warnings
 from pathlib import Path
+import soundfile as sf
 
 warnings.filterwarnings("ignore")
 
@@ -177,21 +178,25 @@ def transcribe_files(asr, model, processor, device, torch_dtype, wav_paths: list
         )
         print(f"  Detected language: {lang_name} ({lang_code})\n")
 
-        # ── Transcription ────────────────────────────────────────────────
+       # ── Transcription ────────────────────────────────────────────────
         t0 = time.time()
-        result = asr(
-            str(wav),
-            return_timestamps=True,
-            generate_kwargs={
-                "language": lang_code,
-                "task": "transcribe",
-            },
-        )
-        elapsed = time.time() - t0
 
-        transcript = result.get("text", "").strip()
-        print(transcript)
-        print(f"\n  ⏱  {elapsed:.1f}s\n")
+# Ensure we are passing raw data to avoid the FFmpeg issue from before
+    audio_data, sr = sf.read(str(wav))
+    audio_input = {"raw": audio_data, "sampling_rate": sr}
+
+    result = asr(
+        audio_input,
+        chunk_length_s=30,          # Required for files > 30s
+        stride_length_s=5,           # Helps prevent cutting off words between chunks
+        return_timestamps=True,      # Tells the pipeline to handle timestamps
+        generate_kwargs={
+            "language": lang_code,
+            "task": "transcribe",
+            "return_timestamps": True, # Required by the model for long-form mode
+        },
+    )
+    elapsed = time.time() - t0
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
