@@ -85,11 +85,22 @@ USE_LM_PERPLEXITY = True
 _sentence_model: Optional[SentenceTransformer] = None
 _lm_model = None
 _lm_tokenizer = None
+_spacy_nlp = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LAZY RESOURCE LOADERS
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _get_spacy_nlp():
+    global _spacy_nlp
+    if _spacy_nlp is None:
+        try:
+            import spacy
+            _spacy_nlp = spacy.load("xx_ent_wiki_sm")
+        except Exception:
+            _spacy_nlp = False
+    return _spacy_nlp
 
 def _get_sentence_model() -> SentenceTransformer:
     global _sentence_model
@@ -231,18 +242,20 @@ def compute_completeness_score(reference: str, candidate: str) -> float:
         word_recall = sum(min(ref_c[w], cand_c[w]) for w in ref_c) / len(ref_words)
 
     # Entity recall (spaCy optional)
-    try:
-        import spacy
-        nlp = spacy.load("xx_ent_wiki_sm")
-        ref_ents = [e.text.lower() for e in nlp(reference).ents]
-        cand_ents = [e.text.lower() for e in nlp(candidate).ents]
-        if not ref_ents:
+    nlp = _get_spacy_nlp()
+    if nlp:
+        try:
+            ref_ents = [e.text.lower() for e in nlp(reference).ents]
+            cand_ents = [e.text.lower() for e in nlp(candidate).ents]
+            if not ref_ents:
+                entity_recall, has_entities = 1.0, False
+            else:
+                ref_ec, cand_ec = Counter(ref_ents), Counter(cand_ents)
+                entity_recall = sum(min(ref_ec[e], cand_ec[e]) for e in ref_ec) / len(ref_ents)
+                has_entities = True
+        except Exception:
             entity_recall, has_entities = 1.0, False
-        else:
-            ref_ec, cand_ec = Counter(ref_ents), Counter(cand_ents)
-            entity_recall = sum(min(ref_ec[e], cand_ec[e]) for e in ref_ec) / len(ref_ents)
-            has_entities = True
-    except Exception:
+    else:
         entity_recall, has_entities = 1.0, False
 
     if has_entities:
