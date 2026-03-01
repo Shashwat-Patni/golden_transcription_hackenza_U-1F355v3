@@ -1,0 +1,12 @@
+streamlit
+librosa
+jiwer
+sentence-transformers
+torch
+torchaudio
+transformers
+pandas
+scipy
+scikit-learn
+altair
+spacy
