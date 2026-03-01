@@ -83,11 +83,22 @@ if st.button("Run Assessment"):
                     dtype      
                 )
 
+                import soundfile as sf
+                audio_data, sr = sf.read(str(tmp_path))
+                audio_input = {"raw": audio_data, "sampling_rate": sr}
+
                 # Transcription
                 t0 = time.time()
                 result = asr(
-                    str(tmp_path),
-                    generate_kwargs={"language": lang_code, "task": "transcribe"}
+                        audio_input, # or whatever variable you are passing here
+                        chunk_length_s=30,          
+                        stride_length_s=5,          
+                        return_timestamps=True,      
+                        generate_kwargs={
+                            "language": lang_code,
+                            "task": "transcribe",
+                            "return_timestamps": True, 
+                        },
                 )
                 reference_text = result.get("text", "").strip()
                 elapsed_gt = time.time() - t0
