@@ -4,3 +4,4 @@
 wav_files/
 .venv
 **/.DS_Store
+ui_app/venv
