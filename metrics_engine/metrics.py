@@ -329,6 +329,35 @@ def compute_fluency_score(text: str) -> dict:
         return {"fluency_score": 0.5, "mode": "neutral"}
 
 
+def compute_fluency_score_batch(texts: list[str]) -> list[dict]:
+    """
+    Batch version of compute_fluency_score to avoid CPU contention in parallel threads.
+    """
+    if not USE_LM_PERPLEXITY:
+        return [{"fluency_score": 0.5, "mode": "disabled"} for _ in texts]
+
+    import torch
+    model, tokenizer = _get_lm()
+    if not model:
+        return [{"fluency_score": 0.5, "mode": "neutral"} for _ in texts]
+
+    results = []
+    for text in texts:
+        if len(text.split()) < MIN_WORDS_FOR_FLUENCY:
+            results.append({"fluency_score": 0.5, "mode": "neutral"})
+            continue
+        try:
+            inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(model.device)
+            with torch.no_grad():
+                loss = model(**inputs, labels=inputs["input_ids"]).loss.item()
+            # Ensure consistency with normalize_metrics: it looks for 'fluency_perplexity'
+            # and then falls back to 'fluency_score'.
+            results.append({"fluency_perplexity": math.exp(loss), "mode": "perplexity"})
+        except Exception:
+            results.append({"fluency_score": 0.5, "mode": "neutral"})
+    return results
+
+
 def compute_punctuation_score(ref_punct: str, cand_punct: str) -> float:
     """
     F1 score over (word_position, punct_char) tuples.
@@ -456,16 +485,16 @@ def rank_transcriptions(scored_results: list[dict]) -> list[dict]:
 # PIPELINE ORCHESTRATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _score_one_candidate(reference: str, candidate_text: str, sem_score: float) -> tuple[dict, dict]:
+def _score_one_candidate(
+    ref_clean: str,
+    cand_clean: str,
+    ref_punct: str,
+    cand_punct: str,
+    sem_score: float,
+    fluency_res: dict,
+) -> tuple[dict, dict]:
     """Compute all non-embedding metrics for a single candidate. Returns (raw, normalized)."""
-    # Normalize text
-    ref_clean   = normalize_clean(reference)
-    cand_clean  = normalize_clean(candidate_text)
-    ref_punct   = normalize_punctuated(reference)
-    cand_punct  = normalize_punctuated(candidate_text)
-
     pr = compute_precision_recall(ref_clean, cand_clean)
-    fluency = compute_fluency_score(cand_punct)
 
     raw = {
         "wer":                compute_wer(ref_clean, cand_clean),
@@ -476,7 +505,7 @@ def _score_one_candidate(reference: str, candidate_text: str, sem_score: float) 
         "completeness_score": compute_completeness_score(ref_clean, cand_clean),
         "semantic_similarity": sem_score,
         "punctuation_score":  compute_punctuation_score(ref_punct, cand_punct),
-        **fluency,
+        **fluency_res,
     }
     return raw, normalize_metrics(raw)
 
@@ -509,13 +538,37 @@ def run_scoring_pipeline(
     start = time.time()
     weights = weights or DEFAULT_WEIGHTS
 
-    # Step 1: Batch semantic embeddings (most expensive — done once for all candidates)
-    cand_texts = [c["text"] for c in candidates]
+    # Step 1: Pre-normalize all (avoid redundant work in threads)
+    ref_clean = normalize_clean(reference)
+    ref_punct = normalize_punctuated(reference)
+
+    candidates_data = []
+    for c in candidates:
+        candidates_data.append({
+            "id": c["transcription_id"],
+            "text": c["text"],
+            "clean": normalize_clean(c["text"]),
+            "punct": normalize_punctuated(c["text"])
+        })
+
+    # Step 2: Batch semantic embeddings (most expensive — done once for all candidates)
+    cand_texts = [cd["text"] for cd in candidates_data]
     sem_scores, _ = compute_semantic_similarity_batch(reference, cand_texts)
 
-    # Step 2: Parallel per-candidate metric computation
-    def process_one(idx, candidate):
-        raw, normalized = _score_one_candidate(reference, candidate["text"], sem_scores[idx])
+    # Step 3: Batch fluency scores (also expensive, done once to avoid parallel CPU contention)
+    cand_punctuated = [cd["punct"] for cd in candidates_data]
+    fluency_scores = compute_fluency_score_batch(cand_punctuated)
+
+    # Step 4: Parallel per-candidate metric computation
+    def process_one(idx, cd):
+        raw, normalized = _score_one_candidate(
+            ref_clean,
+            cd["clean"],
+            ref_punct,
+            cd["punct"],
+            sem_scores[idx],
+            fluency_scores[idx],
+        )
         cqs = compute_cqs(normalized, weights)
 
         flags = []
@@ -523,7 +576,7 @@ def run_scoring_pipeline(
             flags.append("semantic_mismatch_warning")
 
         return {
-            "transcription_id": candidate["transcription_id"],
+            "transcription_id": cd["id"],
             "metrics": {**raw, **normalized},
             "cqs_score": cqs,
             "flags": flags,
@@ -531,11 +584,11 @@ def run_scoring_pipeline(
 
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(process_one, i, c): i for i, c in enumerate(candidates)}
+        futures = {ex.submit(process_one, i, cd): i for i, cd in enumerate(candidates_data)}
         for future in as_completed(futures):
             results.append(future.result())
 
-    # Step 3: Rank
+    # Step 5: Rank
     ranked = rank_transcriptions(results)
 
     return {
