@@ -53,9 +53,9 @@ DEFAULT_WEIGHTS = {
 
 PRESET_WEIGHTS = {
     "default": {
-        "wer": 0.001, "cer": 0.2904, "precision": 0.001,
-        "recall": 0.001, "completeness": 0.162,
-        "semantic_similarity": 0.0249, "fluency": 0.001, "punctuation": 0.4228,
+        "wer": 0.086806, "cer": 0.231501, "precision": 0.009101,
+        "recall": 0.668592, "completeness": 0.001,
+        "semantic_similarity": 0.001, "fluency": 0.001, "punctuation": 0.001,
     },
     "accuracy_focused": {
         "wer": 0.40, "cer": 0.20, "completeness": 0.15,
@@ -401,7 +401,7 @@ def normalize_metrics(raw: dict) -> dict:
     return scores
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────��────────────────────────────
 # COMPOSITE QUALITY SCORE & RANKING
 # ───────────────────────────────────���─────────────────────────────────────────
 
